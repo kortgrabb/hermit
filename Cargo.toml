@@ -1,0 +1,10 @@
+[package]
+name = "shell"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.98"
+crossterm = "0.29.0"
+rustyline = "15.0.0"
+tokio = { version = "*", features = ["full"] } 
