@@ -4,7 +4,6 @@ pub enum ShellCommand {
     Builtin(BuiltinCommand),
     External(),
 }
-
 pub enum BuiltinCommand {
     Help,
     Exit,
@@ -35,9 +34,11 @@ impl ShellCommand {
             "history" => Ok(ShellCommand::Builtin(BuiltinCommand::History)),
             "help" => Ok(ShellCommand::Builtin(BuiltinCommand::Help)),
             "set" => {
-                let alias = &tokens[1];
-                let real = &tokens[2];
-
+                if tokens.len() < 3 {
+                    return Err(anyhow!("Missing arguments for 'set' command"));
+                }
+                let alias = tokens[1].clone();
+                let real = tokens[2].clone();
                 Ok(ShellCommand::Builtin(BuiltinCommand::Set(alias, real)))
             }
             _ => Ok(ShellCommand::External()),
