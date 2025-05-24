@@ -12,9 +12,18 @@ use shlex::Shlex;
 mod color;
 mod shellcommand;
 
+// todo yeah
+fn execute_command(command: ShellCommand, tokens: &[String]) {
+    match command {
+        ShellCommand::Builtin(builtin) => run_builtin(builtin),
+        ShellCommand::External() => run_external(&tokens),
+    }
+}
+
 fn run_external(tokens: &[String]) {
     let cmd = &tokens[0];
-    match Command::new(cmd) // fork the called command
+    // Spawn a new process with inheritance of stdin, stdout, and stderr
+    match Command::new(cmd)
         .args(&tokens[1..])
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
@@ -29,6 +38,22 @@ fn run_external(tokens: &[String]) {
         Err(e) => {
             eprintln!("shell: {cmd}: {e}");
         }
+    }
+}
+
+fn run_builtin(command_builtin: BuiltinCommand) {
+    match command_builtin {
+        BuiltinCommand::Exit => process::exit(0),
+        BuiltinCommand::Cd(target) => {
+            if let Err(e) = env::set_current_dir(&target) {
+                // TODO: Custom print handling
+                eprintln!("{}cd: {e}", Colors::Red.to_string());
+            }
+        }
+        BuiltinCommand::Echo(message) => {
+            println!("{message}");
+        }
+        _ => {}
     }
 }
 
@@ -74,23 +99,4 @@ fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-fn execute_command(command: ShellCommand, tokens: &[String]) {
-    match command {
-        ShellCommand::Builtin(builtin) => match builtin {
-            BuiltinCommand::Exit => process::exit(0),
-            BuiltinCommand::Cd(target) => {
-                // TODO: Custom print handling
-                if let Err(e) = env::set_current_dir(&target) {
-                    eprintln!("{}cd: {e}", Colors::Red.to_string());
-                }
-            }
-            BuiltinCommand::Echo(message) => {
-                println!("{message}");
-            }
-            _ => {}
-        },
-        ShellCommand::External() => run_external(&tokens),
-    }
 }
