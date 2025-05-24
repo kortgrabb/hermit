@@ -5,10 +5,9 @@ use std::{
 };
 
 use anyhow::Result;
-use helpers::LogLevel;
+use helpers::{LogLevel, expand_env_vars};
 use reedline::{DefaultPrompt, FileBackedHistory, Reedline, Signal};
 use shellcommand::{BuiltinCommand, ShellCommand};
-use shlex::Shlex;
 
 mod color;
 mod helpers;
@@ -60,28 +59,88 @@ fn run_builtin(command_builtin: BuiltinCommand, env_vars: &mut HashMap<String, S
         BuiltinCommand::Set(var, value) => {
             env_vars.insert(var, value);
         }
+        BuiltinCommand::Unset(var) => {
+            env_vars.remove(&var);
+        }
+        BuiltinCommand::Env() => {
+            for (key, value) in env_vars.iter() {
+                println!("{}={}", key, value);
+            }
+        }
         _ => {}
     }
 }
 
-fn expand_env_vars(tokens: Vec<String>, env_vars: &HashMap<String, String>) -> Result<Vec<String>> {
-    let mut expanded_tokens = Vec::new();
-    for token in tokens {
-        if token.starts_with('$') {
-            let var_name = &token[1..]; // Remove the leading '$'
-            if let Some(value) = env_vars.get(var_name) {
-                expanded_tokens.push(value.clone());
-            } else {
-                helpers::log(
-                    format!("Warning: Environment variable '{}' not found", var_name).as_str(),
-                    LogLevel::Warning,
-                );
+fn process_line(buffer: String, env_vars: &mut HashMap<String, String>) -> Result<()> {
+    let line = buffer.trim();
+    if line.is_empty() {
+        return Ok(());
+    }
+
+    let mut tokens: Vec<String> = Vec::new();
+    let mut current_token = String::new();
+    let mut in_quote: Option<char> = None;
+    let mut chars = line.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match in_quote {
+            Some(quote_char) => {
+                if ch == quote_char {
+                    in_quote = None;
+                    // Optionally, decide if quotes themselves should be part of the token
+                    // or stripped here. Current logic strips them later.
+                    current_token.push(ch);
+                } else {
+                    current_token.push(ch);
+                }
             }
-        } else {
-            expanded_tokens.push(token);
+            None => {
+                if ch == '\'' || ch == '"' {
+                    in_quote = Some(ch);
+                    // Optionally, decide if quotes themselves should be part of the token.
+                    current_token.push(ch);
+                } else if ch.is_whitespace() {
+                    if !current_token.is_empty() {
+                        tokens.push(current_token);
+                        current_token = String::new();
+                    }
+                } else {
+                    current_token.push(ch);
+                }
+            }
         }
     }
-    Ok(expanded_tokens)
+
+    if !current_token.is_empty() {
+        tokens.push(current_token);
+    }
+
+    // trim the quotes from the tokens if they are at the very start and end
+    let trimmed_tokens: Vec<String> = tokens
+        .iter()
+        .map(|s| {
+            let mut chars = s.chars();
+            let first = chars.next();
+            let last = chars.last(); // Consumes the iterator, so get first before last
+
+            match (first, last) {
+                (Some('\''), Some('\'')) if s.len() >= 2 => s[1..s.len() - 1].to_string(),
+                (Some('"'), Some('"')) if s.len() >= 2 => s[1..s.len() - 1].to_string(),
+                _ => s.to_string(),
+            }
+        })
+        .collect();
+
+    // Check for environment variable expansion
+    tokens = expand_env_vars(trimmed_tokens, env_vars);
+
+    if tokens.is_empty() {
+        return Ok(()); // Skip empty commands after expansion
+    }
+
+    let command: ShellCommand = ShellCommand::from_tokens(&tokens)?;
+    execute_command(command, &tokens, env_vars);
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -99,23 +158,12 @@ fn main() -> Result<()> {
     loop {
         match rl.read_line(&prompt)? {
             Signal::Success(buffer) => {
-                let line = buffer.trim();
-                if line.is_empty() {
-                    continue;
+                if let Err(e) = process_line(buffer, &mut env_vars) {
+                    helpers::log(
+                        format!("Error processing command: {e}").as_str(),
+                        LogLevel::Error,
+                    );
                 }
-
-                // Tokenise with POSIX-like quoting support
-                let lexer = Shlex::new(line);
-                let mut tokens: Vec<String> = lexer.collect();
-                if tokens.is_empty() {
-                    continue;
-                }
-
-                // Check for environment variable expansion
-                tokens = expand_env_vars(tokens, &env_vars)?;
-
-                let command: ShellCommand = ShellCommand::from_tokens(&tokens)?;
-                execute_command(command, &tokens, &mut env_vars);
             }
             Signal::CtrlC | Signal::CtrlD => {
                 println!("cya!");
@@ -142,7 +190,7 @@ mod tests {
         let mut env_vars = HashMap::new();
         env_vars.insert("USER".to_string(), "testuser".to_string());
         let tokens = vec!["Hello".to_string(), "$USER".to_string()];
-        let expanded = expand_env_vars(tokens, &env_vars).unwrap();
+        let expanded = expand_env_vars(tokens, &env_vars);
         assert_eq!(expanded, vec!["Hello".to_string(), "testuser".to_string()]);
     }
 }
