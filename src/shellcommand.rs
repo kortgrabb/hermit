@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Ok, Result, anyhow};
 
 pub enum ShellCommand {
     Builtin(BuiltinCommand),
@@ -6,11 +6,12 @@ pub enum ShellCommand {
 }
 
 pub enum BuiltinCommand {
+    Help,
     Exit,
     Cd(String),
     Echo(String),
     History,
-    Help,
+    Set(String, String),
 }
 
 impl ShellCommand {
@@ -33,6 +34,12 @@ impl ShellCommand {
             }
             "history" => Ok(ShellCommand::Builtin(BuiltinCommand::History)),
             "help" => Ok(ShellCommand::Builtin(BuiltinCommand::Help)),
+            "set" => {
+                let alias = &tokens[1];
+                let real = &tokens[2];
+
+                Ok(ShellCommand::Builtin(BuiltinCommand::Set(alias, real)))
+            }
             _ => Ok(ShellCommand::External()),
         }
     }
