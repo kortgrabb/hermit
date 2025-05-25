@@ -24,15 +24,6 @@ pub fn log(to_print: &str, level: LogLevel) {
     }
 }
 
-/// Check if a environment variable is valid.
-pub fn is_valid_env_var(var: &str, env_vars: &HashMap<String, String>) -> bool {
-    if let Some(value) = env_vars.get(var) {
-        !value.is_empty()
-    } else {
-        false
-    }
-}
-
 pub fn expand_env_vars(tokens: Vec<String>, env_vars: &HashMap<String, String>) -> Vec<String> {
     let mut expanded_tokens = Vec::new();
     // IMPORTANT: We need to handle "single" tokens that may contain spaces
@@ -53,12 +44,23 @@ pub fn expand_env_vars(tokens: Vec<String>, env_vars: &HashMap<String, String>) 
 
         let mut expanded_token = token.clone();
         for var in sorted_variables {
-            let var_name = &var[1..]; // Skip the '$' character
-            if let Some(value) = env_vars.get(var_name) {
-                // HACK: Use word boundaries to ensure exact variable name matching
-                let pattern = format!("\\${}\\b", regex::escape(var_name));
-                let re = regex::Regex::new(&pattern).unwrap();
-                expanded_token = re.replace_all(&expanded_token, value).to_string();
+            let var_name = &var[1..]; // Remove the leading '$'
+            // get the substring up until a special character (e.g., !, @, #, etc.)
+            let var_name = var_name
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect::<String>();
+
+            // only replace the var_name
+            if let Some(value) = env_vars.get(&var_name) {
+                // Replace the variable with its value
+                expanded_token = expanded_token.replace(&format!("${}", var_name), value);
+            } else {
+                // If the variable is not found, log a warning
+                log(
+                    &format!("Environment variable '{}' not found", var_name),
+                    LogLevel::Warning,
+                );
             }
         }
         // Add the expanded token to the result

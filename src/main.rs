@@ -84,12 +84,19 @@ fn resolve_aliases(tokens: &mut Vec<String>, aliases: &HashMap<String, String>) 
         return;
     }
 
+    let mut expanded_aliases = std::collections::HashSet::new();
     let mut resolved = false;
-    let mut depth = 0;
-    const MAX_ALIAS_DEPTH: usize = 10; // Prevent infinite alias loops
 
-    while !resolved && depth < MAX_ALIAS_DEPTH {
-        if let Some(alias_value) = aliases.get(&tokens[0]) {
+    while !resolved {
+        let current_command = &tokens[0];
+
+        // Check if we've already expanded this alias to prevent infinite recursion
+        if expanded_aliases.contains(current_command) {
+            resolved = true;
+            continue;
+        }
+
+        if let Some(alias_value) = aliases.get(current_command) {
             // Parse the alias value into tokens
             let alias_tokens: Vec<String> = alias_value
                 .split_whitespace()
@@ -97,12 +104,14 @@ fn resolve_aliases(tokens: &mut Vec<String>, aliases: &HashMap<String, String>) 
                 .collect();
 
             if !alias_tokens.is_empty() {
+                // Mark this alias as expanded
+                expanded_aliases.insert(current_command.clone());
+
                 // Replace the first token with the alias expansion
                 tokens.remove(0);
                 for (i, token) in alias_tokens.into_iter().enumerate() {
                     tokens.insert(i, token);
                 }
-                depth += 1;
             } else {
                 resolved = true;
             }
@@ -193,7 +202,7 @@ fn run_repl() -> Result<()> {
     let mut aliases: HashMap<String, String> = HashMap::new();
 
     for env_var in env::vars() {
-        println!("{env_var:?}");
+        env_vars.insert(env_var.0, env_var.1);
     }
 
     let hist = Box::new(
