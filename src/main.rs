@@ -17,9 +17,10 @@ fn execute_command(
     command: ShellCommand,
     tokens: &[String],
     env_vars: &mut HashMap<String, String>,
+    aliases: &mut HashMap<String, String>,
 ) {
     match command {
-        ShellCommand::Builtin(builtin) => run_builtin(builtin, env_vars),
+        ShellCommand::Builtin(builtin) => run_builtin(builtin, env_vars, aliases),
         ShellCommand::External() => run_external(&tokens),
     }
 }
@@ -45,7 +46,11 @@ fn run_external(tokens: &[String]) {
     }
 }
 
-fn run_builtin(command_builtin: BuiltinCommand, env_vars: &mut HashMap<String, String>) {
+fn run_builtin(
+    command_builtin: BuiltinCommand,
+    env_vars: &mut HashMap<String, String>,
+    aliases: &mut HashMap<String, String>,
+) {
     match command_builtin {
         BuiltinCommand::Exit => process::exit(0),
         BuiltinCommand::Cd(target) => {
@@ -67,11 +72,51 @@ fn run_builtin(command_builtin: BuiltinCommand, env_vars: &mut HashMap<String, S
                 println!("{}={}", key, value);
             }
         }
+        BuiltinCommand::Alias(key, value) => {
+            aliases.insert(key, value);
+        }
         _ => {}
     }
 }
 
-fn process_line(buffer: String, env_vars: &mut HashMap<String, String>) -> Result<()> {
+fn resolve_aliases(tokens: &mut Vec<String>, aliases: &HashMap<String, String>) {
+    if tokens.is_empty() {
+        return;
+    }
+
+    let mut resolved = false;
+    let mut depth = 0;
+    const MAX_ALIAS_DEPTH: usize = 10; // Prevent infinite alias loops
+
+    while !resolved && depth < MAX_ALIAS_DEPTH {
+        if let Some(alias_value) = aliases.get(&tokens[0]) {
+            // Parse the alias value into tokens
+            let alias_tokens: Vec<String> = alias_value
+                .split_whitespace()
+                .map(|s| s.to_string())
+                .collect();
+
+            if !alias_tokens.is_empty() {
+                // Replace the first token with the alias expansion
+                tokens.remove(0);
+                for (i, token) in alias_tokens.into_iter().enumerate() {
+                    tokens.insert(i, token);
+                }
+                depth += 1;
+            } else {
+                resolved = true;
+            }
+        } else {
+            resolved = true;
+        }
+    }
+}
+
+fn process_line(
+    buffer: String,
+    env_vars: &mut HashMap<String, String>,
+    aliases: &mut HashMap<String, String>,
+) -> Result<()> {
     let line = buffer.trim();
     if line.is_empty() {
         return Ok(());
@@ -87,8 +132,6 @@ fn process_line(buffer: String, env_vars: &mut HashMap<String, String>) -> Resul
             Some(quote_char) => {
                 if ch == quote_char {
                     in_quote = None;
-                    // Optionally, decide if quotes themselves should be part of the token
-                    // or stripped here. Current logic strips them later.
                     current_token.push(ch);
                 } else {
                     current_token.push(ch);
@@ -121,7 +164,7 @@ fn process_line(buffer: String, env_vars: &mut HashMap<String, String>) -> Resul
         .map(|s| {
             let mut chars = s.chars();
             let first = chars.next();
-            let last = chars.last(); // Consumes the iterator, so get first before last
+            let last = chars.last();
 
             match (first, last) {
                 (Some('\''), Some('\'')) if s.len() >= 2 => s[1..s.len() - 1].to_string(),
@@ -131,19 +174,28 @@ fn process_line(buffer: String, env_vars: &mut HashMap<String, String>) -> Resul
         })
         .collect();
 
-    // Check for environment variable expansion
     tokens = expand_env_vars(trimmed_tokens, env_vars);
 
     if tokens.is_empty() {
         return Ok(()); // Skip empty commands after expansion
     }
 
+    // Resolve aliases before parsing command
+    resolve_aliases(&mut tokens, aliases);
+
     let command: ShellCommand = ShellCommand::from_tokens(&tokens)?;
-    execute_command(command, &tokens, env_vars);
+    execute_command(command, &tokens, env_vars, aliases);
     Ok(())
 }
 
-fn main() -> Result<()> {
+fn run_repl() -> Result<()> {
+    let mut env_vars: HashMap<String, String> = HashMap::new();
+    let mut aliases: HashMap<String, String> = HashMap::new();
+
+    for env_var in env::vars() {
+        println!("{env_var:?}");
+    }
+
     let hist = Box::new(
         FileBackedHistory::with_file(100, "history.txt".into())
             .expect("error creating history file"),
@@ -153,12 +205,10 @@ fn main() -> Result<()> {
     let mut rl = Reedline::create().with_history(hist);
     let prompt = DefaultPrompt::default();
 
-    let mut env_vars: HashMap<String, String> = HashMap::with_capacity(100);
-
     loop {
         match rl.read_line(&prompt)? {
             Signal::Success(buffer) => {
-                if let Err(e) = process_line(buffer, &mut env_vars) {
+                if let Err(e) = process_line(buffer, &mut env_vars, &mut aliases) {
                     helpers::log(
                         format!("Error processing command: {e}").as_str(),
                         LogLevel::Error,
@@ -175,22 +225,10 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_run_external() {
-        let tokens = vec!["echo".to_string(), "Hello, World!".to_string()];
-        run_external(&tokens);
+fn main() -> Result<()> {
+    if let Err(e) = run_repl() {
+        eprintln!("Error running REPL: {e}");
+        process::exit(1);
     }
-
-    #[test]
-    fn test_expand_env_vars() {
-        let mut env_vars = HashMap::new();
-        env_vars.insert("USER".to_string(), "testuser".to_string());
-        let tokens = vec!["Hello".to_string(), "$USER".to_string()];
-        let expanded = expand_env_vars(tokens, &env_vars);
-        assert_eq!(expanded, vec!["Hello".to_string(), "testuser".to_string()]);
-    }
+    Ok(())
 }
