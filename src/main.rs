@@ -13,14 +13,18 @@ mod color;
 mod helpers;
 mod shellcommand;
 
-fn execute_command(
-    command: ShellCommand,
-    tokens: &[String],
-    env_vars: &mut HashMap<String, String>,
-    aliases: &mut HashMap<String, String>,
-) {
+struct ShellInstance {
+    env_vars: HashMap<String, String>,
+    aliases: HashMap<String, String>,
+}
+
+fn execute_command(command: ShellCommand, tokens: &[String], shell_instance: &mut ShellInstance) {
     match command {
-        ShellCommand::Builtin(builtin) => run_builtin(builtin, env_vars, aliases),
+        ShellCommand::Builtin(builtin) => run_builtin(
+            builtin,
+            &mut shell_instance.env_vars,
+            &mut shell_instance.aliases,
+        ),
         ShellCommand::External() => run_external(&tokens),
     }
 }
@@ -121,11 +125,7 @@ fn resolve_aliases(tokens: &mut Vec<String>, aliases: &HashMap<String, String>) 
     }
 }
 
-fn process_line(
-    buffer: String,
-    env_vars: &mut HashMap<String, String>,
-    aliases: &mut HashMap<String, String>,
-) -> Result<()> {
+fn process_line(buffer: String, shell_instance: &mut ShellInstance) -> Result<()> {
     let line = buffer.trim();
     if line.is_empty() {
         return Ok(());
@@ -183,26 +183,28 @@ fn process_line(
         })
         .collect();
 
-    tokens = expand_env_vars(trimmed_tokens, env_vars);
+    tokens = expand_env_vars(trimmed_tokens, &shell_instance.env_vars);
 
     if tokens.is_empty() {
         return Ok(()); // Skip empty commands after expansion
     }
 
     // Resolve aliases before parsing command
-    resolve_aliases(&mut tokens, aliases);
+    resolve_aliases(&mut tokens, &shell_instance.aliases);
 
     let command: ShellCommand = ShellCommand::from_tokens(&tokens)?;
-    execute_command(command, &tokens, env_vars, aliases);
+    execute_command(command, &tokens, shell_instance);
     Ok(())
 }
 
 fn run_repl() -> Result<()> {
-    let mut env_vars: HashMap<String, String> = HashMap::new();
-    let mut aliases: HashMap<String, String> = HashMap::new();
+    let mut shell_instance = ShellInstance {
+        env_vars: HashMap::new(),
+        aliases: HashMap::new(),
+    };
 
     for env_var in env::vars() {
-        env_vars.insert(env_var.0, env_var.1);
+        shell_instance.env_vars.insert(env_var.0, env_var.1);
     }
 
     let hist = Box::new(
@@ -217,7 +219,7 @@ fn run_repl() -> Result<()> {
     loop {
         match rl.read_line(&prompt)? {
             Signal::Success(buffer) => {
-                if let Err(e) = process_line(buffer, &mut env_vars, &mut aliases) {
+                if let Err(e) = process_line(buffer, &mut shell_instance) {
                     helpers::log(
                         format!("Error processing command: {e}").as_str(),
                         LogLevel::Error,
